@@ -6,6 +6,19 @@
 #include "SlidingPuzzle.hpp"
 
 // ==============================================================================
+// Sound Configuration (Optional)
+// ==============================================================================
+// Uncomment the line below to enable sound effects
+// Hardware Required: Passive buzzer connected to BUZZER_PIN
+// #define ENABLE_SOUND
+
+#ifdef ENABLE_SOUND
+  #define BUZZER_PIN 2        // GPIO2 (shared with relay, can be changed)
+  #define BUZZER_CHANNEL 0    // LEDC channel for PWM
+  #define BUZZER_RESOLUTION 8 // 8-bit resolution (0-255)
+#endif
+
+// ==============================================================================
 // Game State
 // ==============================================================================
 enum GameState { MAIN_MENU, PUZZLE_SELECT, PLAYING, WIN_SCREEN };
@@ -33,6 +46,20 @@ bool lastTouchState = false;
 unsigned long lastTouchTime = 0;
 const unsigned long TOUCH_DEBOUNCE_MS = 250;
 
+// Animation state
+bool isAnimating = false;
+unsigned long animStartTime = 0;
+int animFromPos = -1;
+int animToPos = -1;
+int animTileNum = 0;
+const unsigned long ANIM_DURATION_MS = 180;
+
+// Touch feedback state
+int flashTile = -1;
+unsigned long flashStartTime = 0;
+uint16_t flashColor = 0;
+const unsigned long FLASH_DURATION_MS = 100;
+
 // UI Constants
 const int STATUS_BAR_HEIGHT = 40;
 const int BUTTON_BAR_HEIGHT = 50;
@@ -45,6 +72,14 @@ void showMainMenu();
 void showPuzzleSelect(int difficulty);
 void showWinScreen();
 void startGame(int difficulty, int puzzleIndex);
+
+#ifdef ENABLE_SOUND
+void initSound();
+void playTone(int frequency, int duration);
+void playSlideSound();
+void playErrorSound();
+void playWinSound();
+#endif
 
 // Colors
 const uint16_t COL_BG        = 0x1082;  // Dark gray
@@ -60,6 +95,62 @@ const uint16_t COL_GRID_LINE = 0x4208;  // Grid separator
 const uint16_t COL_EMPTY     = 0x2104;  // Empty tile
 const uint16_t COL_WIN_BG    = 0x0320;  // Dark green
 const uint16_t COL_GOLD      = 0xFEA0;  // Gold
+const uint16_t COL_FLASH_VALID   = 0xFFFF;  // White highlight for valid tile
+const uint16_t COL_FLASH_INVALID = 0xF800;  // Red flash for invalid tile
+
+// ==============================================================================
+// Sound Functions (Optional PWM Buzzer Support)
+// ==============================================================================
+#ifdef ENABLE_SOUND
+
+// Initialize LEDC PWM for sound generation
+// Call this once in setup()
+void initSound() {
+    Serial.println("Initializing PWM buzzer...");
+
+    // Configure LEDC timer
+    ledcSetup(BUZZER_CHANNEL, 1000, BUZZER_RESOLUTION);  // 1kHz default, 8-bit resolution
+
+    // Attach pin to channel
+    ledcAttachPin(BUZZER_PIN, BUZZER_CHANNEL);
+
+    // Start silent
+    ledcWrite(BUZZER_CHANNEL, 0);
+
+    Serial.printf("Buzzer ready on GPIO%d (LEDC channel %d)\n", BUZZER_PIN, BUZZER_CHANNEL);
+}
+
+// Play a tone at specified frequency for specified duration
+// Non-blocking - uses delay() but duration is short (50-200ms)
+void playTone(int frequency, int duration) {
+    if (frequency > 0) {
+        ledcWriteTone(BUZZER_CHANNEL, frequency);
+        ledcWrite(BUZZER_CHANNEL, 128);  // 50% duty cycle for volume
+        delay(duration);
+    }
+    ledcWrite(BUZZER_CHANNEL, 0);  // Stop tone
+}
+
+// Quick beep for valid tile slide
+void playSlideSound() {
+    playTone(500, 50);  // 500Hz for 50ms
+}
+
+// Low buzz for invalid move attempt
+void playErrorSound() {
+    playTone(200, 100);  // 200Hz for 100ms
+}
+
+// Ascending melody for puzzle completion: C-E-G
+void playWinSound() {
+    playTone(262, 200);  // C (262Hz)
+    delay(50);           // Short gap
+    playTone(330, 200);  // E (330Hz)
+    delay(50);           // Short gap
+    playTone(392, 200);  // G (392Hz)
+}
+
+#endif  // ENABLE_SOUND
 
 // ==============================================================================
 // ST7701S Manual Initialization (3-Wire SPI)
@@ -290,13 +381,53 @@ void showPuzzleSelect(int difficulty) {
 }
 
 // ==============================================================================
-// Draw a single tile at its grid position
+// Draw flash feedback overlay on a tile
 // ==============================================================================
-void drawTile(int tileNum, int gridPos, int gridSize, int tileSize, int offsetX, int offsetY) {
-    int destRow = gridPos / gridSize;
-    int destCol = gridPos % gridSize;
-    int destX = offsetX + destCol * tileSize;
-    int destY = offsetY + destRow * tileSize;
+void drawFlashFeedback(int gridPos, int gridSize, int tileSize, int offsetX, int offsetY, uint16_t color) {
+    int row = gridPos / gridSize;
+    int col = gridPos % gridSize;
+    int x = offsetX + col * tileSize;
+    int y = offsetY + row * tileSize;
+
+    // Draw a thick border for valid tile (white/yellow)
+    if (color == COL_FLASH_VALID) {
+        // Draw multiple rectangles for thick border
+        for (int i = 0; i < 3; i++) {
+            tft.drawRect(x + i, y + i, tileSize - (i * 2), tileSize - (i * 2), color);
+        }
+    } else {
+        // Draw red semi-transparent overlay for invalid tile
+        // Since we can't do true transparency in RGB565, we'll draw a red border + corners
+        tft.drawRect(x, y, tileSize, tileSize, color);
+        tft.drawRect(x + 1, y + 1, tileSize - 2, tileSize - 2, color);
+
+        // Draw diagonal lines in corners for stronger effect
+        for (int i = 0; i < 10; i++) {
+            tft.drawLine(x + i, y, x, y + i, color);
+            tft.drawLine(x + tileSize - 1 - i, y, x + tileSize - 1, y + i, color);
+            tft.drawLine(x + i, y + tileSize - 1, x, y + tileSize - 1 - i, color);
+            tft.drawLine(x + tileSize - 1 - i, y + tileSize - 1, x + tileSize - 1, y + tileSize - 1 - i, color);
+        }
+    }
+}
+
+// ==============================================================================
+// Draw a single tile at its grid position (or custom pixel position)
+// ==============================================================================
+void drawTile(int tileNum, int gridPos, int gridSize, int tileSize, int offsetX, int offsetY, int customX = -1, int customY = -1) {
+    int destX, destY;
+
+    if (customX >= 0 && customY >= 0) {
+        // Use custom pixel coordinates (for animation)
+        destX = customX;
+        destY = customY;
+    } else {
+        // Use grid position
+        int destRow = gridPos / gridSize;
+        int destCol = gridPos % gridSize;
+        destX = offsetX + destCol * tileSize;
+        destY = offsetY + destRow * tileSize;
+    }
 
     if (tileNum == 0) {
         // Empty tile
@@ -397,7 +528,7 @@ void drawButtonBar() {
 // ==============================================================================
 // Draw full game screen
 // ==============================================================================
-void drawGameScreen() {
+void drawGameScreen(bool skipAnimatingTile = false) {
     if (!puzzle) return;
 
     int gridSize = puzzle->getGridSize();
@@ -411,6 +542,11 @@ void drawGameScreen() {
     // Draw all tiles
     int totalTiles = gridSize * gridSize;
     for (int pos = 0; pos < totalTiles; pos++) {
+        // Skip the animating tile if requested
+        if (skipAnimatingTile && isAnimating && pos == animToPos) {
+            continue;
+        }
+
         int tileNum = puzzle->getTile(pos);
         drawTile(tileNum, pos, gridSize, tileSize, offsetX, offsetY);
     }
@@ -486,10 +622,86 @@ void startGame(int difficulty, int puzzleIndex) {
 }
 
 // ==============================================================================
+// Start tile animation
+// ==============================================================================
+void startTileAnimation(int fromPos, int toPos, int tileNum) {
+    isAnimating = true;
+    animStartTime = millis();
+    animFromPos = fromPos;
+    animToPos = toPos;
+    animTileNum = tileNum;
+}
+
+// ==============================================================================
+// Update animation state and draw animating tile
+// Returns true if animation is complete
+// ==============================================================================
+bool updateAnimation() {
+    if (!isAnimating || !puzzle) return true;
+
+    unsigned long now = millis();
+    unsigned long elapsed = now - animStartTime;
+
+    if (elapsed >= ANIM_DURATION_MS) {
+        // Animation complete
+        isAnimating = false;
+        return true;
+    }
+
+    // Calculate interpolation factor (0.0 to 1.0)
+    float t = (float)elapsed / (float)ANIM_DURATION_MS;
+
+    int gridSize = puzzle->getGridSize();
+    int tileSize = GAME_AREA_SIZE / gridSize;
+    int offsetX = (480 - tileSize * gridSize) / 2;
+    int offsetY = GAME_AREA_Y + (GAME_AREA_SIZE - tileSize * gridSize) / 2;
+
+    // Calculate from/to positions in pixels
+    int fromRow = animFromPos / gridSize;
+    int fromCol = animFromPos % gridSize;
+    int fromX = offsetX + fromCol * tileSize;
+    int fromY = offsetY + fromRow * tileSize;
+
+    int toRow = animToPos / gridSize;
+    int toCol = animToPos % gridSize;
+    int toX = offsetX + toCol * tileSize;
+    int toY = offsetY + toRow * tileSize;
+
+    // Linear interpolation
+    int currentX = fromX + (int)((toX - fromX) * t);
+    int currentY = fromY + (int)((toY - fromY) * t);
+
+    // Clear previous position trail (draw empty tile behind)
+    // We need to clear the path between from and to
+    if (fromX == toX) {
+        // Vertical movement
+        int y1 = min(fromY, toY);
+        int y2 = max(fromY, toY) + tileSize;
+        tft.fillRect(fromX, y1, tileSize, y2 - y1, COL_EMPTY);
+    } else {
+        // Horizontal movement
+        int x1 = min(fromX, toX);
+        int x2 = max(fromX, toX) + tileSize;
+        tft.fillRect(x1, fromY, x2 - x1, tileSize, COL_EMPTY);
+    }
+
+    // Draw the animating tile at interpolated position
+    drawTile(animTileNum, animToPos, gridSize, tileSize, offsetX, offsetY, currentX, currentY);
+
+    return false;
+}
+
+// ==============================================================================
 // Handle touch during gameplay
 // ==============================================================================
 void handleGameTouch(int x, int y) {
     if (!puzzle) return;
+
+    // Block touch input during animation
+    if (isAnimating) {
+        Serial.println("Touch blocked: animation in progress");
+        return;
+    }
 
     int gridSize = puzzle->getGridSize();
     int tileSize = GAME_AREA_SIZE / gridSize;
@@ -539,6 +751,17 @@ void handleGameTouch(int x, int y) {
 
     if (puzzle->canMove(tilePos)) {
         int oldEmptyPos = puzzle->getEmptyPos();
+        int tileNum = puzzle->getTile(tilePos);
+
+        // Show valid tile feedback (bright border)
+        flashTile = tilePos;
+        flashStartTime = millis();
+        flashColor = COL_FLASH_VALID;
+        drawFlashFeedback(tilePos, gridSize, tileSize, offsetX, offsetY, flashColor);
+
+        #ifdef ENABLE_SOUND
+        playSlideSound();
+        #endif
 
         // Start timer on first move
         if (!timerRunning && gameStartTime == 0) {
@@ -546,18 +769,24 @@ void handleGameTouch(int x, int y) {
             timerRunning = true;
         }
 
+        // Start animation before moving tile in puzzle state
+        startTileAnimation(tilePos, oldEmptyPos, tileNum);
+
+        // Move tile in puzzle state
         puzzle->moveTile(tilePos);
 
-        // Redraw only the two affected tiles
-        redrawMovedTiles(tilePos, oldEmptyPos);
+        // Note: Win check will happen after animation completes in loop()
+    } else {
+        // Invalid tile - show red flash
+        Serial.println("Invalid move - tile can't move");
+        flashTile = tilePos;
+        flashStartTime = millis();
+        flashColor = COL_FLASH_INVALID;
+        drawFlashFeedback(tilePos, gridSize, tileSize, offsetX, offsetY, flashColor);
 
-        if (puzzle->isWon()) {
-            timerRunning = false;
-            gameEndTime = millis();
-            Serial.println("PUZZLE SOLVED!");
-            delay(500);  // Brief pause before win screen
-            showWinScreen();
-        }
+        #ifdef ENABLE_SOUND
+        playErrorSound();
+        #endif
     }
 }
 
@@ -720,7 +949,12 @@ void setup() {
 
     puzzleManager.listFiles();
 
-    // 4. Show main menu
+    // 4. Initialize sound (if enabled)
+    #ifdef ENABLE_SOUND
+    initSound();
+    #endif
+
+    // 5. Show main menu
     showMainMenu();
 
     Serial.println("Setup Complete!");
@@ -734,7 +968,50 @@ void loop() {
     bool touching = tft.getTouch(&x, &y);
     unsigned long now = millis();
 
-    // Touch press detection with debounce
+    // Update animation if in progress
+    if (gameState == PLAYING && isAnimating) {
+        bool animComplete = updateAnimation();
+
+        if (animComplete) {
+            // Animation finished - redraw final state and check win
+            isAnimating = false;
+
+            // Force status bar update for move count
+            lastDisplayedMoves = -1;
+            drawStatusBar();
+
+            // Check for win condition
+            if (puzzle && puzzle->isWon()) {
+                timerRunning = false;
+                gameEndTime = millis();
+                Serial.println("PUZZLE SOLVED!");
+
+                #ifdef ENABLE_SOUND
+                playWinSound();
+                #endif
+
+                delay(500);  // Brief pause before win screen
+                showWinScreen();
+            }
+        }
+    }
+
+    // Clear flash feedback after duration
+    if (gameState == PLAYING && flashTile >= 0 && (now - flashStartTime >= FLASH_DURATION_MS)) {
+        // Redraw the tile to clear flash effect
+        if (puzzle && !isAnimating) {
+            int gridSize = puzzle->getGridSize();
+            int tileSize = GAME_AREA_SIZE / gridSize;
+            int offsetX = (480 - tileSize * gridSize) / 2;
+            int offsetY = GAME_AREA_Y + (GAME_AREA_SIZE - tileSize * gridSize) / 2;
+
+            // Only redraw if the tile is still in the same position (not animating)
+            drawTile(puzzle->getTile(flashTile), flashTile, gridSize, tileSize, offsetX, offsetY);
+        }
+        flashTile = -1;
+    }
+
+    // Touch press detection with debounce (not during animation)
     if (touching && !lastTouchState && (now - lastTouchTime > TOUCH_DEBOUNCE_MS)) {
         lastTouchTime = now;
         Serial.printf("Touch at (%d, %d) state=%d\n", x, y, (int)gameState);
@@ -757,8 +1034,8 @@ void loop() {
 
     lastTouchState = touching;
 
-    // Update timer display during gameplay
-    if (gameState == PLAYING && timerRunning) {
+    // Update timer display during gameplay (but not during animation to avoid flicker)
+    if (gameState == PLAYING && timerRunning && !isAnimating) {
         drawStatusBar();
     }
 

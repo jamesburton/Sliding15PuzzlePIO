@@ -973,12 +973,12 @@ void loop() {
         bool animComplete = updateAnimation();
 
         if (animComplete) {
-            // Animation finished - redraw final state and check win
+            // Animation finished - redraw tiles at final positions
             isAnimating = false;
 
-            // Force status bar update for move count
-            lastDisplayedMoves = -1;
-            drawStatusBar();
+            // Redraw both positions to ensure clean final state
+            // animFromPos now has empty tile, animToPos now has the moved tile
+            redrawMovedTiles(animFromPos, animToPos);
 
             // Check for win condition
             if (puzzle && puzzle->isWon()) {

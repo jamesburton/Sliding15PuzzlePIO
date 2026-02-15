@@ -1,0 +1,9 @@
+# Name,   Type, SubType, Offset,  Size,     Flags
+# ESP32-S3 Custom Partition Table for Sliding Puzzle
+# Total Flash: 8MB (0x800000)
+# App: 1.2MB, LittleFS: 6.875MB
+
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x130000,
+spiffs,   data, spiffs,  0x140000,0x6C0000,

@@ -1,0 +1,248 @@
+================================================================================
+                    PUZZLE IMAGE PREPARATION WORKFLOW
+================================================================================
+
+INPUT IMAGE (Any size, any aspect ratio)
+┌────────────────────────────────────────┐
+│                                        │
+│  ████████████████████████████████████  │  ← Border detected
+│  ██                              ██  │
+│  ██  ╔══════════════════════╗    ██  │
+│  ██  ║                      ║    ██  │
+│  ██  ║   ACTUAL CONTENT     ║    ██  │
+│  ██  ║                      ║    ██  │
+│  ██  ║   (Photo/Image)      ║    ██  │
+│  ██  ║                      ║    ██  │
+│  ██  ╚══════════════════════╝    ██  │
+│  ██                              ██  │
+│  ████████████████████████████████████  │
+│                                        │
+└────────────────────────────────────────┘
+         Example: 1920x1080 JPEG
+
+                    ↓
+        ┌───────────────────────┐
+        │  BORDER DETECTION     │
+        │  (scan edges for      │
+        │   uniform colors)     │
+        └───────────────────────┘
+                    ↓
+
+BORDERS REMOVED
+┌────────────────────────┐
+│  ╔══════════════════╗  │
+│  ║                  ║  │
+│  ║  ACTUAL CONTENT  ║  │
+│  ║                  ║  │
+│  ║  (Photo/Image)   ║  │
+│  ║                  ║  │
+│  ╚══════════════════╝  │
+└────────────────────────┘
+    Example: 1820x980
+
+                    ↓
+        ┌───────────────────────┐
+        │  SMART RESIZE         │
+        │  (scale to fill       │
+        │   480x480, maintain   │
+        │   aspect ratio)       │
+        └───────────────────────┘
+                    ↓
+
+RESIZED (Fills square)
+┌──────────────────────────────┐
+│  ╔══════════════════════════╗│
+│  ║                          ║│
+│  ║    ACTUAL CONTENT        ║│
+│  ║                          ║│
+│  ║    (Photo/Image)         ║│
+│  ║                          ║│
+│  ╚══════════════════════════╝│
+└──────────────────────────────┘
+    Example: 890x480
+
+                    ↓
+        ┌───────────────────────┐
+        │  CENTER CROP          │
+        │  (crop to exactly     │
+        │   480x480)            │
+        └───────────────────────┘
+                    ↓
+
+FINAL 480x480 IMAGE
+┌────────────────────────┐
+│  ╔══════════════════╗  │
+│  ║                  ║  │
+│  ║ ACTUAL CONTENT   ║  │
+│  ║                  ║  │
+│  ║ (Photo/Image)    ║  │
+│  ║                  ║  │
+│  ╚══════════════════╝  │
+└────────────────────────┘
+    480x480 pixels
+
+                    ↓
+        ┌───────────────────────┐
+        │  SAVE & GENERATE      │
+        │  OUTPUTS              │
+        └───────────────────────┘
+                    ↓
+          ┌─────────┴─────────┐
+          │                   │
+          ↓                   ↓
+     FINAL IMAGE         TILE PREVIEW
+   (480x480 PNG)        (Shows grid)
+
+┌────────────────┐    ┌────┬────┬────┬────┐
+│                │    │ 1  │ 2  │ 3  │ 4  │
+│                │    ├────┼────┼────┼────┤
+│   BEAUTIFUL    │    │ 5  │ 6  │ 7  │ 8  │
+│                │    ├────┼────┼────┼────┤
+│   PUZZLE       │    │ 9  │ 10 │ 11 │ 12 │
+│                │    ├────┼────┼────┼────┤
+│   IMAGE        │    │ 13 │ 14 │ 15 │    │
+│                │    └────┴────┴────┴────┘
+└────────────────┘
+  Ready for ESP32      Visual preview
+
+
+              (Optional: --header flag)
+                       ↓
+              C HEADER FILE (.h)
+    ┌─────────────────────────────────┐
+    │ const uint16_t image[] = {     │
+    │   0x1234, 0x5678, 0x9ABC, ...  │
+    │ };                             │
+    │ const int width = 480;         │
+    │ const int height = 480;        │
+    └─────────────────────────────────┘
+            Embeddable in firmware
+
+================================================================================
+                         TILE SIZE REFERENCE
+================================================================================
+
+Grid Size │ Tiles │ Tile Size │ Difficulty │ Preview Size
+══════════╪═══════╪═══════════╪════════════╪══════════════
+  3x3     │   8   │ 160x160px │    Easy    │   486x486
+  4x4     │  15   │ 120x120px │   Medium   │   486x486
+  5x5     │  24   │  96x96px  │    Hard    │   488x488
+  6x6     │  35   │  80x80px  │   Expert   │   490x490
+
+Note: Preview is slightly larger due to 2px gaps between tiles for visibility
+
+================================================================================
+                      BORDER DETECTION EXAMPLES
+================================================================================
+
+THRESHOLD = 5 (Very Sensitive)
+────────────────────────────────
+Detects:
+  ✓ Subtle gradients on edges
+  ✓ Nearly-solid colors (variance < 5)
+  ✓ Photo matte borders
+  ✓ Slight color shifts
+
+THRESHOLD = 10 (Default - Recommended)
+────────────────────────────────
+Detects:
+  ✓ Solid white borders
+  ✓ Solid black borders
+  ✓ Photo frames
+  ✓ Letterboxing/pillarboxing
+  ✗ Textured edges
+  ✗ Complex patterns
+
+THRESHOLD = 20 (Less Sensitive)
+────────────────────────────────
+Detects:
+  ✓ Very solid borders only
+  ✓ Thick frames
+  ✗ Subtle borders
+  ✗ Gradient edges
+
+================================================================================
+                        COLOR FORMAT REFERENCE
+================================================================================
+
+RGB888 (24-bit True Color)
+┌────────┬────────┬────────┐
+│ Red    │ Green  │ Blue   │
+│ 8 bits │ 8 bits │ 8 bits │
+│ 0-255  │ 0-255  │ 0-255  │
+└────────┴────────┴────────┘
+Size: 3 bytes per pixel
+480x480 image = 691,200 bytes (~675 KB)
+
+RGB565 (16-bit High Color)  ← DEFAULT for ESP32
+┌────────┬─────────┬────────┐
+│ Red    │ Green   │ Blue   │
+│ 5 bits │ 6 bits  │ 5 bits │
+│ 0-31   │ 0-63    │ 0-31   │
+└────────┴─────────┴────────┘
+Size: 2 bytes per pixel
+480x480 image = 460,800 bytes (~450 KB)
+
+Conversion: RGB888 → RGB565
+────────────────────────────
+R5 = R8 >> 3        (keep top 5 bits)
+G6 = G8 >> 2        (keep top 6 bits)
+B5 = B8 >> 3        (keep top 5 bits)
+
+RGB565 = (R5 << 11) | (G6 << 5) | B5
+
+Example:
+  RGB888: (255, 128, 64)
+  →  R5 = 31, G6 = 32, B5 = 8
+  →  RGB565 = 0xFC08
+
+================================================================================
+                         MEMORY REQUIREMENTS
+================================================================================
+
+For 4x4 Puzzle (15 tiles @ 120x120 each):
+
+OPTION 1: Store Full Image
+──────────────────────────
+Full 480x480 RGB565:     450 KB
+Split into 15 sprites:   +650 KB (tiles stored separately)
+Total:                   ~1.1 MB
+
+OPTION 2: Store Tiles Only
+──────────────────────────
+15 sprites @ 120x120:    650 KB
+No full image needed
+Total:                   ~650 KB  ← RECOMMENDED
+
+OPTION 3: Embedded (PROGMEM)
+──────────────────────────
+Full image in flash:     450 KB (doesn't use RAM)
+Load into sprites:       650 KB RAM
+Total RAM:               ~650 KB
+Flash:                   450 KB
+
+ESP32-4848S040C_I has 8 MB PSRAM - plenty of room! ✓
+
+================================================================================
+                         QUALITY SETTINGS
+================================================================================
+
+Resampling Algorithm: LANCZOS (Highest Quality)
+────────────────────────────────────────────────
+  • Best for downscaling
+  • Sharp edges preserved
+  • Minimal aliasing
+  • Slightly slower (~1-2 sec per image)
+
+Alternatives (if needed):
+  BICUBIC  - Good quality, faster
+  BILINEAR - Medium quality, fast
+  NEAREST  - Low quality, very fast
+
+PNG Optimization: Enabled
+────────────────────────────────────────────────
+  • Reduces file size 20-40%
+  • Lossless compression
+  • No quality loss
+
+================================================================================

@@ -1,0 +1,5 @@
+# Python Requirements for Puzzle Image Preparation Tool
+# Install with: pip install -r requirements.txt
+
+Pillow>=10.0.0
+numpy>=1.24.0
